@@ -556,14 +556,27 @@ LIMIT 10;
 
 ### Benchmarking Your Workload
 
-To determine the optimal cluster size and configuration for your specific use case, use the **BigQuery Ingestor Benchmarking Tool** (coming soon). The tool will:
+To determine the optimal cluster size and configuration for your specific use case, use the **bq-benchmark** tool included in this repository. The tool measures:
 
-- Measure actual throughput with your data volume and record sizes
-- Test different batch size configurations
-- Recommend optimal cluster sizing based on your target latency
-- Identify storage and network bottlenecks specific to your workload
+- Sustained ingestion throughput (records/min, MB/min) from BigQuery to Harper
+- Query availability throughput (how fast data becomes queryable)
+- Replication lag between ingestion and query availability
+- Latency percentiles (P50, P95, P99)
+- Resource utilization (CPU, memory)
 
-Until the benchmarking tool is available, start with the batch size recommendations below and monitor your sync lag to determine if scaling is needed.
+**Quick Start:**
+
+```bash
+cd tools/bq-benchmark
+npm install
+node cli.js setup --verify    # Verify connectivity
+node cli.js run               # Run benchmark with defaults (2min warmup, 5min measure, 1min cooldown)
+node cli.js run --json        # Also generate JSON report
+```
+
+The benchmark uses a three-phase approach (warmup, measurement, cooldown) with sliding window averages to provide accurate measurements excluding startup artifacts and eventual consistency delays.
+
+See [tools/bq-benchmark/README.md](tools/bq-benchmark/README.md) for complete documentation.
 
 **Note:** Harper doesn't autoscale. Add/remove nodes manually via Fabric UI or self-hosted configuration. Cluster size changes require workload rebalancing (see Limitations).
 
