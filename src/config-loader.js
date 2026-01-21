@@ -7,7 +7,12 @@ import { readFileSync } from 'fs';
 import { parse } from 'yaml';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { validateFullConfig as _validateFullConfig, validateAndNormalizeColumns } from './validators.js';
+import {
+	validateFullConfig as _validateFullConfig,
+	validateAndNormalizeColumns,
+	validateProxyConfig,
+	validateCustomQuery,
+} from './validators.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -126,6 +131,7 @@ function normalizeConfig(config) {
 			projectId: legacyBigQueryConfig.projectId,
 			credentials: legacyBigQueryConfig.credentials,
 			location: legacyBigQueryConfig.location,
+			proxy: legacyBigQueryConfig.proxy, // Preserve proxy config if present
 			tables: [tableConfig],
 		},
 		sync: {
@@ -167,21 +173,42 @@ function validateMultiTableConfig(config) {
 			log.error('[ConfigLoader.validateMultiTableConfig] Missing required field: table.id');
 			throw new Error('Missing required field: table.id');
 		}
-		if (!table.dataset) {
-			log.error(`[ConfigLoader.validateMultiTableConfig] Missing 'dataset' for table: ${table.id}`);
-			throw new Error(`Missing required field 'dataset' for table: ${table.id}`);
-		}
-		if (!table.table) {
-			log.error(`[ConfigLoader.validateMultiTableConfig] Missing 'table' for table: ${table.id}`);
-			throw new Error(`Missing required field 'table' for table: ${table.id}`);
-		}
+
+		// timestampColumn is always required (for checkpoint tracking)
 		if (!table.timestampColumn) {
 			log.error(`[ConfigLoader.validateMultiTableConfig] Missing 'timestampColumn' for table: ${table.id}`);
 			throw new Error(`Missing required field 'timestampColumn' for table: ${table.id}`);
 		}
+
 		if (!table.targetTable) {
 			log.error(`[ConfigLoader.validateMultiTableConfig] Missing 'targetTable' for table: ${table.id}`);
 			throw new Error(`Missing required field 'targetTable' for table: ${table.id}`);
+		}
+
+		// Check if using customQuery or standard table config
+		if (table.customQuery) {
+			// Custom query mode - validate the query
+			validateCustomQuery(table.customQuery, table.timestampColumn);
+			log.debug(`[ConfigLoader.validateMultiTableConfig] Table ${table.id} uses customQuery`);
+		} else {
+			// Standard mode - dataset, table, columns required
+			if (!table.dataset) {
+				log.error(`[ConfigLoader.validateMultiTableConfig] Missing 'dataset' for table: ${table.id}`);
+				throw new Error(
+					`Missing required field 'dataset' for table: ${table.id}. ` +
+						`Either provide dataset/table/columns OR use customQuery.`
+				);
+			}
+			if (!table.table) {
+				log.error(`[ConfigLoader.validateMultiTableConfig] Missing 'table' for table: ${table.id}`);
+				throw new Error(
+					`Missing required field 'table' for table: ${table.id}. ` +
+						`Either provide dataset/table/columns OR use customQuery.`
+				);
+			}
+			log.debug(
+				`[ConfigLoader.validateMultiTableConfig] Table ${table.id} uses standard sync (${table.dataset}.${table.table})`
+			);
 		}
 
 		// Check for duplicate IDs
@@ -292,9 +319,20 @@ export function getPluginConfig(config = null) {
 	}
 
 	// Config is already normalized to multi-table format by loadConfig
+	// Validate proxy config if present
+	if (fullConfig.bigquery.proxy) {
+		validateProxyConfig(fullConfig.bigquery.proxy);
+	}
+
 	// Validate and normalize columns for each table
 	const tablesWithNormalizedColumns = fullConfig.bigquery.tables.map((table) => {
-		const normalizedColumns = validateAndNormalizeColumns(table.columns, table.timestampColumn);
+		// Validate custom query if present
+		if (table.customQuery) {
+			validateCustomQuery(table.customQuery, table.timestampColumn);
+		}
+
+		const hasCustomQuery = !!table.customQuery;
+		const normalizedColumns = validateAndNormalizeColumns(table.columns, table.timestampColumn, hasCustomQuery);
 
 		return {
 			...table,
@@ -307,6 +345,7 @@ export function getPluginConfig(config = null) {
 			projectId: fullConfig.bigquery.projectId,
 			credentials: fullConfig.bigquery.credentials,
 			location: fullConfig.bigquery.location || 'US',
+			proxy: fullConfig.bigquery.proxy, // Pass through proxy config
 			tables: tablesWithNormalizedColumns,
 		},
 		sync: fullConfig.sync,
@@ -336,8 +375,10 @@ export function getTableConfig(tableId, config = null) {
 			table: tableConfig.table,
 			timestampColumn: tableConfig.timestampColumn,
 			columns: tableConfig.columns,
+			customQuery: tableConfig.customQuery, // Include custom query if present
 			credentials: fullConfig.bigquery.credentials,
 			location: fullConfig.bigquery.location,
+			proxy: fullConfig.bigquery.proxy, // Include proxy config
 		},
 		sync: {
 			...fullConfig.sync,

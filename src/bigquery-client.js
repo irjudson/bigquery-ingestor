@@ -15,44 +15,90 @@ export class BigQueryClient {
 	 * @param {Object} config - Configuration object
 	 * @param {Object} config.bigquery - BigQuery configuration
 	 * @param {string} config.bigquery.projectId - GCP project ID
-	 * @param {string} config.bigquery.dataset - BigQuery dataset name
-	 * @param {string} config.bigquery.table - BigQuery table name
+	 * @param {string} config.bigquery.dataset - BigQuery dataset name (optional if customQuery)
+	 * @param {string} config.bigquery.table - BigQuery table name (optional if customQuery)
 	 * @param {string} config.bigquery.timestampColumn - Timestamp column name
 	 * @param {string} config.bigquery.credentials - Path to credentials file
 	 * @param {string} config.bigquery.location - BigQuery location (e.g., 'US', 'EU')
 	 * @param {Array<string>} config.bigquery.columns - Columns to select (defaults to ['*'])
+	 * @param {string} config.bigquery.customQuery - Optional custom SQL query
+	 * @param {Object} config.bigquery.proxy - Optional proxy configuration
 	 */
 	constructor(config) {
 		logger.info('[BigQueryClient] Constructor called - initializing BigQuery client');
 		logger.debug(
-			`[BigQueryClient] Config - projectId: ${config.bigquery.projectId}, dataset: ${config.bigquery.dataset}, table: ${config.bigquery.table}, location: ${config.bigquery.location}`
+			`[BigQueryClient] Config - projectId: ${config.bigquery.projectId}, ` +
+				`${config.bigquery.customQuery ? 'customQuery mode' : `dataset: ${config.bigquery.dataset}, table: ${config.bigquery.table}`}, ` +
+				`location: ${config.bigquery.location}`
 		);
 
 		this.config = config;
-		this.client = new BigQuery({
+
+		// Configure BigQuery client options
+		const clientOptions = {
 			projectId: config.bigquery.projectId,
 			keyFilename: config.bigquery.credentials,
 			location: config.bigquery.location,
-		});
+		};
+
+		// Add proxy configuration if enabled
+		// BigQuery client uses gaxios/google-auth-library which respects HTTP_PROXY/HTTPS_PROXY
+		// These environment variables only affect BigQuery API calls, not Harper's replication
+		if (config.bigquery.proxy?.enabled) {
+			const proxyUrl = config.bigquery.proxy.url;
+			logger.info(`[BigQueryClient] Configuring proxy: ${proxyUrl}`);
+
+			// Set proxy environment variables for BigQuery client
+			// The google-cloud libraries (gaxios/google-auth-library) respect these variables
+			// This is the standard Node.js approach for proxy configuration
+			if (!process.env.HTTP_PROXY) {
+				process.env.HTTP_PROXY = proxyUrl;
+			}
+			if (!process.env.HTTPS_PROXY) {
+				process.env.HTTPS_PROXY = proxyUrl;
+			}
+			if (!process.env.http_proxy) {
+				process.env.http_proxy = proxyUrl;
+			}
+			if (!process.env.https_proxy) {
+				process.env.https_proxy = proxyUrl;
+			}
+
+			logger.info(
+				`[BigQueryClient] Proxy configured for BigQuery API calls: ${proxyUrl}. ` +
+					`This affects only BigQuery SDK requests, not Harper replication.`
+			);
+		}
+
+		this.client = new BigQuery(clientOptions);
 
 		this.dataset = config.bigquery.dataset;
 		this.table = config.bigquery.table;
 		this.timestampColumn = config.bigquery.timestampColumn;
 		this.columns = config.bigquery.columns || ['*'];
+		this.customQuery = config.bigquery.customQuery;
 
 		// Retry configuration with exponential backoff
 		this.maxRetries = config.bigquery.maxRetries || 5;
 		this.initialRetryDelay = config.bigquery.initialRetryDelay || 1000; // 1 second
 
-		// Initialize query builder with column selection
+		// Initialize query builder with column selection or custom query
 		this.queryBuilder = new QueryBuilder({
 			dataset: this.dataset,
 			table: this.table,
 			timestampColumn: this.timestampColumn,
 			columns: this.columns,
+			customQuery: this.customQuery,
 		});
 
-		logger.info(`[BigQueryClient] Client initialized successfully with columns: ${this.queryBuilder.getColumnList()}`);
+		if (this.customQuery) {
+			logger.info(`[BigQueryClient] Client initialized with custom query, timestamp column: ${this.timestampColumn}`);
+		} else {
+			logger.info(
+				`[BigQueryClient] Client initialized successfully with columns: ${this.queryBuilder.getColumnList()}`
+			);
+		}
+
 		logger.info(
 			`[BigQueryClient] Retry configuration - maxRetries: ${this.maxRetries}, initialDelay: ${this.initialRetryDelay}ms`
 		);
