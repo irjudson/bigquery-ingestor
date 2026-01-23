@@ -32,10 +32,17 @@ export function validateBigQueryConfig(config) {
  * Validates and normalizes column configuration
  * @param {Array|string|undefined} columns - Column configuration (array, "*", or undefined)
  * @param {string} timestampColumn - The timestamp column name (required in column list)
+ * @param {boolean} hasCustomQuery - Whether a custom query is being used
  * @returns {Array<string>} Normalized column array
  * @throws {Error} If column configuration is invalid
  */
-export function validateAndNormalizeColumns(columns, timestampColumn) {
+export function validateAndNormalizeColumns(columns, timestampColumn, hasCustomQuery = false) {
+	// If using custom query, columns are optional (query defines the columns)
+	if (hasCustomQuery) {
+		// Return ['*'] as a placeholder - custom query defines actual columns
+		return ['*'];
+	}
+
 	// Case 1: columns not specified (undefined/null) -> SELECT *
 	if (columns === undefined || columns === null) {
 		return ['*'];
@@ -157,6 +164,95 @@ export function validateRetryConfig(retryConfig) {
 }
 
 /**
+ * Validates proxy configuration
+ * @param {Object} proxyConfig - The proxy configuration object
+ * @throws {Error} If proxy configuration is invalid
+ */
+export function validateProxyConfig(proxyConfig) {
+	if (!proxyConfig) {
+		return true; // Proxy config is optional
+	}
+
+	// enabled is required if proxy section exists
+	if (typeof proxyConfig.enabled !== 'boolean') {
+		throw new Error('proxy.enabled must be a boolean (true or false)');
+	}
+
+	// If enabled, url is required
+	if (proxyConfig.enabled) {
+		if (!proxyConfig.url || typeof proxyConfig.url !== 'string') {
+			throw new Error('proxy.url is required when proxy is enabled');
+		}
+
+		// Basic URL validation - should start with http:// or https://
+		const url = proxyConfig.url.trim();
+		if (!url.startsWith('http://') && !url.startsWith('https://')) {
+			throw new Error('proxy.url must start with http:// or https://');
+		}
+
+		// Validate URL format (basic check)
+		try {
+			new URL(url);
+		} catch (error) {
+			throw new Error(`Invalid proxy.url format: ${error.message}`);
+		}
+	}
+
+	return true;
+}
+
+/**
+ * Validates custom query configuration
+ * @param {string} customQuery - The custom SQL query
+ * @param {string} _timestampColumn - The timestamp column name (must be in query results)
+ * @throws {Error} If custom query is invalid
+ */
+export function validateCustomQuery(customQuery, _timestampColumn) {
+	if (!customQuery) {
+		return true; // Custom query is optional
+	}
+
+	if (typeof customQuery !== 'string') {
+		throw new Error('customQuery must be a string');
+	}
+
+	const trimmedQuery = customQuery.trim();
+	if (trimmedQuery.length === 0) {
+		throw new Error('customQuery cannot be empty');
+	}
+
+	// Validate query starts with SELECT (case insensitive)
+	if (!trimmedQuery.match(/^\s*SELECT\s+/i)) {
+		throw new Error('customQuery must start with SELECT');
+	}
+
+	// Check if query contains @lastTimestamp variable (required for incremental sync)
+	if (!trimmedQuery.includes('@lastTimestamp')) {
+		throw new Error(
+			'customQuery must include @lastTimestamp variable in WHERE clause for incremental sync. ' +
+				'Example: WHERE event_time > TIMESTAMP(@lastTimestamp)'
+		);
+	}
+
+	// Warn if query contains ORDER BY or LIMIT (we add these automatically)
+	if (trimmedQuery.match(/\bORDER\s+BY\b/i)) {
+		logger?.warn(
+			'[validators.validateCustomQuery] customQuery contains ORDER BY clause. ' +
+				'This will be wrapped and an outer ORDER BY will be added for partitioning.'
+		);
+	}
+
+	if (trimmedQuery.match(/\bLIMIT\b/i)) {
+		logger?.warn(
+			'[validators.validateCustomQuery] customQuery contains LIMIT clause. ' +
+				'This will be wrapped and an outer LIMIT will be added for batch control.'
+		);
+	}
+
+	return true;
+}
+
+/**
  * Validates the entire configuration object
  * @param {Object} config - The full configuration object
  * @throws {Error} If any part of the configuration is invalid
@@ -169,8 +265,23 @@ export function validateFullConfig(config) {
 	// Validate BigQuery config
 	validateBigQueryConfig(config.bigquery);
 
+	// Validate proxy config if present
+	if (config.bigquery.proxy) {
+		validateProxyConfig(config.bigquery.proxy);
+	}
+
 	// Validate and normalize columns
-	const normalizedColumns = validateAndNormalizeColumns(config.bigquery.columns, config.bigquery.timestampColumn);
+	const hasCustomQuery = !!config.bigquery.customQuery;
+	const normalizedColumns = validateAndNormalizeColumns(
+		config.bigquery.columns,
+		config.bigquery.timestampColumn,
+		hasCustomQuery
+	);
+
+	// Validate custom query if present
+	if (config.bigquery.customQuery) {
+		validateCustomQuery(config.bigquery.customQuery, config.bigquery.timestampColumn);
+	}
 
 	// Validate sync config
 	if (config.sync) {
@@ -193,5 +304,7 @@ export default {
 	validateAndNormalizeColumns,
 	validateSyncConfig,
 	validateRetryConfig,
+	validateProxyConfig,
+	validateCustomQuery,
 	validateFullConfig,
 };
