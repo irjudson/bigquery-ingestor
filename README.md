@@ -1,3 +1,5 @@
+> **Historical Project** — Developed during tenure at Harper (2025–2026). Demonstrates data pipeline patterns for ingesting BigQuery datasets into Harper for real-time edge processing. Preserved as a reference implementation.
+
 # BigQuery Sync Plugin for Harper
 
 **Production-ready distributed data ingestion from Google BigQuery to Harper.**
